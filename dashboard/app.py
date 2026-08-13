@@ -1,5 +1,6 @@
 import geopandas as gpd
 import pandas as pd
+import plotly.express as px
 import pydeck as pdk
 import streamlit as st
 from shapely.geometry import Point
@@ -96,9 +97,97 @@ st.pydeck_chart(
     )
 )
 
-# Future dashboard sections
+## Load NOAA Houston weather data
+@st.cache_data
+def load_weather_data():
+    url = (
+        "https://www.ncei.noaa.gov/data/"
+        "global-historical-climatology-network-daily/access/"
+        "USW00012960.csv"
+    )
+
+    data = pd.read_csv(
+        url,
+        usecols=["DATE", "TMAX", "PRCP"],
+    )
+
+    data["DATE"] = pd.to_datetime(data["DATE"])
+    data["TMAX"] = data["TMAX"] / 10
+    data["PRCP"] = data["PRCP"] / 10
+
+    return data
+
+
 st.subheader("Climate Visualizations")
-st.info("Temperature, rainfall, and extreme-weather charts will be added here.")
+
+try:
+    weather_data = load_weather_data()
+    weather_data["Year"] = weather_data["DATE"].dt.year
+
+    yearly_counts = weather_data.groupby("Year")["TMAX"].count()
+    complete_years = yearly_counts[yearly_counts >= 330].index
+
+    weather_data = weather_data[
+        weather_data["Year"].isin(complete_years)
+    ]
+
+    yearly_temperature = (
+        weather_data
+        .groupby("Year", as_index=False)["TMAX"]
+        .mean()
+    )
+
+    temperature_chart = px.line(
+        yearly_temperature,
+        x="Year",
+        y="TMAX",
+        markers=True,
+        title="Yearly Average Maximum Temperature",
+        labels={
+            "TMAX": "Average Maximum Temperature (°C)"
+        },
+    )
+
+    st.plotly_chart(temperature_chart, width="stretch")
+    yearly_rainfall = (
+    weather_data
+    .groupby("Year", as_index=False)["PRCP"]
+    .sum()
+)
+
+    rainfall_chart = px.bar(
+        yearly_rainfall,
+        x="Year",
+        y="PRCP",
+        title="Yearly Total Rainfall",
+        labels={
+            "PRCP": "Total Rainfall (mm)"
+        },
+        color_discrete_sequence=["royalblue"],
+    )
+
+    st.plotly_chart(rainfall_chart, width="stretch")
+    extreme_heat = (
+        weather_data
+        .assign(Extreme_Heat=weather_data["TMAX"] >= 35)
+        .groupby("Year", as_index=False)["Extreme_Heat"]
+        .sum()
+    )
+
+    heat_chart = px.bar(
+        extreme_heat,
+        x="Year",
+        y="Extreme_Heat",
+        title="Extreme Heat Days by Year",
+        labels={
+            "Extreme_Heat": "Number of Days with TMAX ≥ 35°C"
+        },
+        color_discrete_sequence=["tomato"],
+    )
+
+    st.plotly_chart(heat_chart, width="stretch")
+except Exception as error:
+    st.error(f"Unable to load NOAA data: {error}")
 
 st.subheader("County-Level Disaster Risk")
 st.info("Model-generated county risk scores will be added here.")

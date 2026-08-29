@@ -1,0 +1,19 @@
+# Environment
+venv/
+__pycache__/
+*.pyc
+
+# Data (raw data shouldn't be committed - too large / managed by data-engineering branch)
+data/
+*.parquet
+
+# Model checkpoints (large files)
+models/*.ckpt
+models/*.pt
+models/*.pth
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# OS
+.DS_Store

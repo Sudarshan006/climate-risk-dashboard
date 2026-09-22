@@ -4,3 +4,4 @@ geopandas
 pydeck
 shapely
 plotly
+pyarrow

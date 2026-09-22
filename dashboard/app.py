@@ -129,32 +129,42 @@ st.pydeck_chart(pdk.Deck(
     tooltip={"text": "{Location}\n{ID}"},
 ))
 
-## Load daily weather only for the selected station; cache by station ID.
-@st.cache_data(ttl=86400, max_entries=32)
-def load_weather_data(station_id):
-    url = (
-        "https://www.ncei.noaa.gov/data/"
-        "global-historical-climatology-network-daily/access/"
-        f"{station_id}.csv"
+# Read only the selected station and chart columns from the processed dataset.
+WEATHER_FILE = (
+    Path(__file__).resolve().parents[1]
+    / "data" / "processed" / "gulf_coast_historical.parquet"
+)
+
+
+@st.cache_data(max_entries=32)
+def load_weather_data(station_id, file_path, file_version):
+    # file_version invalidates cached records when the dataset is replaced.
+    data = pd.read_parquet(
+        file_path,
+        engine="pyarrow",
+        columns=["DATE", "TMAX", "PRCP"],
+        filters=[("STATION", "==", station_id)],
     )
-
-    data = pd.read_csv(
-        url,
-        usecols=["DATE", "TMAX", "PRCP"],
-    )
-
-    data["DATE"] = pd.to_datetime(data["DATE"])
-    data["TMAX"] = data["TMAX"] / 10
-    data["PRCP"] = data["PRCP"] / 10
-
-    return data
+    if data.empty:
+        raise ValueError(f"No processed weather records found for {station_id}.")
+    data["DATE"] = pd.to_datetime(data["DATE"], errors="raise")
+    if data["DATE"].isna().any() or data["DATE"].duplicated().any():
+        raise ValueError("Selected station has missing or duplicate observation dates.")
+    for column in ["TMAX", "PRCP"]:
+        data[column] = pd.to_numeric(data[column], errors="raise")
+    # The processed dataset already stores temperature in °C and rainfall in mm.
+    return data.sort_values("DATE").reset_index(drop=True)
 
 
 st.subheader("Climate Visualizations")
 
 try:
     with st.spinner("Loading weather records for the selected station…"):
-        weather_data = load_weather_data(selected_station_id)
+        file_info = WEATHER_FILE.stat()
+        weather_data = load_weather_data(
+            selected_station_id, str(WEATHER_FILE),
+            (file_info.st_mtime_ns, file_info.st_size),
+        )
     weather_data["Year"] = weather_data["DATE"].dt.year
 
     # Apply coverage separately: temperature coverage cannot validate rainfall.
@@ -167,7 +177,7 @@ try:
     rainfall_data = weather_data[weather_data["Year"].isin(rainfall_years)]
     st.caption(
         f"Historical observations for {location} ({selected_station_id}). "
-        "Current year excluded. Each chart requires at least 330 valid daily "
+        "Source: processed NOAA dataset. Current year excluded. Each chart requires at least 330 valid daily "
         "observations per year for its variable. Rainfall totals and heat-day "
         "counts cover observed days only; qualifying years may still have gaps."
     )
@@ -231,8 +241,13 @@ try:
     )
 
     st.plotly_chart(heat_chart, width="stretch")
+except FileNotFoundError:
+    st.error(
+        "Weather dataset missing. Place gulf_coast_historical.parquet in "
+        "the project's data/processed folder."
+    )
 except Exception as error:
-    st.error(f"Unable to load NOAA data: {error}")
+    st.error(f"Unable to load processed weather data: {error}")
 
 st.subheader("County-Level Disaster Risk")
 st.info("Model-generated county risk scores will be added here.")

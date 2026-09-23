@@ -193,6 +193,31 @@ try:
     # Apply coverage separately: temperature coverage cannot validate rainfall.
     closed_years = weather_data["Year"] < pd.Timestamp.now(tz="UTC").year
     weather_data = weather_data.loc[closed_years].copy()
+    # Reset the year selection for each station, whose history may differ.
+    selected_year_range = None
+    if not weather_data.empty:
+        first_year = int(weather_data["Year"].min())
+        last_year = int(weather_data["Year"].max())
+        if first_year < last_year:
+            selected_year_range = st.sidebar.slider(
+                "Select year range",
+                min_value=first_year,
+                max_value=last_year,
+                value=(first_year, last_year),
+                step=1,
+                key=f"year_range_{selected_station_id}",
+                help="Filters all historical charts. Years still need at least 330 valid observations per variable.",
+            )
+        else:
+            selected_year_range = (first_year, last_year)
+            st.sidebar.caption(f"Available historical year: {first_year}")
+        start_year, end_year = selected_year_range
+        weather_data = weather_data.loc[
+            weather_data["Year"].between(start_year, end_year)
+        ].copy()
+    else:
+        st.sidebar.caption("No observations before the current year are available.")
+
     counts = weather_data.groupby("Year")[["TMAX", "PRCP"]].count()
     temperature_years = counts.index[counts["TMAX"] >= 330]
     rainfall_years = counts.index[counts["PRCP"] >= 330]
@@ -204,10 +229,12 @@ try:
         "observations per year for its variable. Rainfall totals and heat-day "
         "counts cover observed days only; qualifying years may still have gaps."
     )
+    if selected_year_range is not None:
+        st.caption(f"Selected years: {start_year}–{end_year} (inclusive).")
     if temperature_data.empty:
-        st.warning("No years meet the temperature coverage requirement for this station.")
+        st.warning("No years meet the temperature coverage requirement in the selected period.")
     if rainfall_data.empty:
-        st.warning("No years meet the rainfall coverage requirement for this station.")
+        st.warning("No years meet the rainfall coverage requirement in the selected period.")
 
     yearly_temperature = (
         temperature_data

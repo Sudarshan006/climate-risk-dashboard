@@ -1,0 +1,6 @@
+my_test_app.py
+
+data/
+processed/
+*.parquet
+*.csv

@@ -67,7 +67,27 @@ except (ValueError, OSError) as error:
     st.error(f"Unable to read the station list: {error}")
     st.stop()
 
-station_ids = stations["ID"].tolist()
+# Filter the station dropdown by state; keep all stations available by default.
+STATE_NAMES = {
+    "AL": "Alabama",
+    "FL": "Florida",
+    "LA": "Louisiana",
+    "MS": "Mississippi",
+    "TX": "Texas",
+}
+selected_state = st.sidebar.selectbox(
+    "Select state",
+    ["All states"] + sorted(stations["STATE"].unique().tolist()),
+    format_func=lambda state: (
+        "All states" if state == "All states"
+        else f"{STATE_NAMES.get(state, state)} ({state})"
+    ),
+)
+filtered_stations = (
+    stations if selected_state == "All states"
+    else stations.loc[stations["STATE"] == selected_state]
+)
+station_ids = filtered_stations["ID"].tolist()
 station_labels = {
     row.ID: f"{row.NAME}, {row.STATE} ({row.ID})"
     for row in stations.itertuples()
@@ -80,7 +100,10 @@ selected_station_id = st.sidebar.selectbox(
 )
 selected_station = stations.loc[stations["ID"] == selected_station_id].iloc[0]
 location = f"{selected_station['NAME']}, {selected_station['STATE']}"
-st.sidebar.caption(f"{len(stations):,} Gulf Coast weather stations available.")
+st.sidebar.caption(
+    f"{len(filtered_stations):,} stations shown out of "
+    f"{len(stations):,} Gulf Coast weather stations."
+)
 st.sidebar.info(
     "Historical charts load only the selected station. "
     "Disaster-type selection is for future risk forecasts; it does not filter these charts."

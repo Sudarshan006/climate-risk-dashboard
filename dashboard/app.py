@@ -1,4 +1,5 @@
 from pathlib import Path
+from calendar import isleap
 
 import geopandas as gpd
 import pandas as pd
@@ -179,6 +180,40 @@ def load_weather_data(station_id, file_path, file_version):
     return data.sort_values("DATE").reset_index(drop=True)
 
 
+
+# Project comparison policy, not an official NOAA climate normal.
+REFERENCE_START, REFERENCE_END = 1991, 2020
+MIN_REFERENCE_YEARS = 24  # Require 80% of the fixed 30-year reference period.
+MIN_VALID_DAYS = 330
+
+
+def annual_coverage(data, start_year, end_year):
+    """Include absent years and absent dates as missing, including leap days."""
+    years = pd.Index(range(start_year, end_year + 1), name="Year")
+    counts = data.groupby("Year")[["TMAX", "PRCP"]].count().reindex(years, fill_value=0)
+    result = pd.DataFrame(index=years)
+    result["Calendar days"] = [366 if isleap(y) else 365 for y in years]
+    for variable, label in [("TMAX", "Temperature"), ("PRCP", "Rainfall")]:
+        result[f"{label} valid days"] = counts[variable]
+        result[f"{label} missing days"] = result["Calendar days"] - counts[variable]
+        result[f"{label} coverage (%)"] = (
+            100 * counts[variable] / result["Calendar days"]
+        ).round(1)
+        result[f"{label} status"] = counts[variable].map(
+            lambda n: "Included" if n >= MIN_VALID_DAYS else "Excluded: fewer than 330 days"
+        )
+    return result.reset_index()
+
+
+def temperature_reference(data):
+    """Equal-weight mean of qualifying annual means, independent of chart filters."""
+    reference = data.loc[data["Year"].between(REFERENCE_START, REFERENCE_END)]
+    annual = reference.groupby("Year")["TMAX"].agg(["count", "mean"])
+    annual = annual.loc[annual["count"] >= MIN_VALID_DAYS]
+    value = float(annual["mean"].mean()) if len(annual) >= MIN_REFERENCE_YEARS else None
+    return value, annual.index.tolist()
+
+
 st.subheader("Climate Visualizations")
 
 try:
@@ -193,6 +228,7 @@ try:
     # Apply coverage separately: temperature coverage cannot validate rainfall.
     closed_years = weather_data["Year"] < pd.Timestamp.now(tz="UTC").year
     weather_data = weather_data.loc[closed_years].copy()
+    reference_value, reference_years = temperature_reference(weather_data)
     # Reset the year selection for each station, whose history may differ.
     selected_year_range = None
     if not weather_data.empty:
@@ -219,8 +255,8 @@ try:
         st.sidebar.caption("No observations before the current year are available.")
 
     counts = weather_data.groupby("Year")[["TMAX", "PRCP"]].count()
-    temperature_years = counts.index[counts["TMAX"] >= 330]
-    rainfall_years = counts.index[counts["PRCP"] >= 330]
+    temperature_years = counts.index[counts["TMAX"] >= MIN_VALID_DAYS]
+    rainfall_years = counts.index[counts["PRCP"] >= MIN_VALID_DAYS]
     temperature_data = weather_data[weather_data["Year"].isin(temperature_years)]
     rainfall_data = weather_data[weather_data["Year"].isin(rainfall_years)]
     st.caption(
@@ -242,6 +278,60 @@ try:
         .mean()
     )
 
+    st.subheader("Temperature compared with historical average")
+    st.caption(
+        "Reference: 1991–2020 for this station. Each qualifying year's average daily "
+        "maximum temperature receives equal weight. This reference does not change "
+        "with the year-range slider. It is a project reference, not an official NOAA normal."
+    )
+    st.caption(
+        f"Reference coverage: {len(reference_years)} of 30 years qualify. "
+        "This project requires at least 24 qualifying years, each with at least 330 "
+        "valid temperature days. Missing days can still affect annual averages."
+    )
+    with st.expander("Which reference years are included?"):
+        st.write(", ".join(map(str, reference_years)) if reference_years else "None")
+        excluded = sorted(set(range(REFERENCE_START, REFERENCE_END + 1)) - set(reference_years))
+        st.write("Excluded years: " + (", ".join(map(str, excluded)) if excluded else "None"))
+    if not yearly_temperature.empty:
+        comparison_years = yearly_temperature["Year"].astype(int).tolist()
+        comparison_year = st.selectbox(
+            "Year to compare", comparison_years, index=len(comparison_years) - 1,
+            key=f"comparison_year_{selected_station_id}",
+        )
+        year_value = float(yearly_temperature.loc[
+            yearly_temperature["Year"] == comparison_year, "TMAX"
+        ].iloc[0])
+        actual, reference_card, difference_card = st.columns(3)
+        actual.metric(f"{comparison_year} average maximum temperature", f"{year_value:.2f} °C")
+        reference_card.metric(
+            "1991–2020 reference average",
+            f"{reference_value:.2f} °C" if reference_value is not None else "Unavailable",
+        )
+        difference_card.metric(
+            "Difference from reference",
+            f"{year_value - reference_value:+.2f} °C" if reference_value is not None else "Unavailable",
+        )
+        st.caption(
+            "Positive difference = warmer; negative = cooler. This compares annual "
+            "average daily maximum temperatures; it is not a disaster-risk classification."
+        )
+    if reference_value is None:
+        st.info("Reference comparison unavailable: fewer than 24 years qualify in 1991–2020.")
+
+    with st.expander("Data completeness for the selected years", expanded=False):
+        st.caption(
+            "Missing days include both absent dates and missing measurements. "
+            "Temperature coverage also controls the heat-day chart. Included years "
+            "can still have missing days; rainfall totals and heat-day counts are not "
+            "adjusted to estimate unobserved days."
+        )
+        if selected_year_range is not None:
+            coverage = annual_coverage(weather_data, start_year, end_year)
+            st.dataframe(coverage, hide_index=True, width="stretch")
+        else:
+            st.info("No completed historical years are available.")
+
     temperature_chart = px.line(
         yearly_temperature,
         x="Year",
@@ -253,6 +343,11 @@ try:
         },
     )
 
+    if reference_value is not None:
+        temperature_chart.add_hline(
+            y=reference_value, line_dash="dash", line_color="#22C55E",
+            annotation_text="1991–2020 reference average", annotation_position="top left",
+        )
     st.plotly_chart(temperature_chart, width="stretch")
     yearly_rainfall = (
         rainfall_data

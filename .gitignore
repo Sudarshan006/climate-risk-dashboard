@@ -4,3 +4,5 @@ data/
 processed/
 *.parquet
 *.csv
+
+kafka_credentials.properties
